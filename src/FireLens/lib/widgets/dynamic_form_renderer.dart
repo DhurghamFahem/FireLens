@@ -61,9 +61,12 @@ class _DynamicFormRendererState extends State<DynamicFormRenderer> {
         FieldType.timestamp => raw is Timestamp
             ? raw.toDate()
             : DateTime.now(),
-        FieldType.map => raw is Map<String, dynamic>
-            ? firestoreMapToFieldNodes(raw)
-            : <FieldNode>[],
+        FieldType.map => field.mapFields.isNotEmpty
+            ? _initSchemaMap(field.mapFields,
+                raw is Map<String, dynamic> ? raw : {})
+            : raw is Map<String, dynamic>
+                ? firestoreMapToFieldNodes(raw)
+                : <FieldNode>[],
         FieldType.array => raw is List
             ? _rawListToArrayItems(raw)
             : <ArrayItem>[],
@@ -71,6 +74,35 @@ class _DynamicFormRendererState extends State<DynamicFormRenderer> {
             ? _GeoPointDraft(raw.latitude, raw.longitude)
             : _GeoPointDraft(0, 0),
         FieldType.reference => raw is DocumentReference ? raw.path : '',
+        FieldType.nullValue => null,
+      };
+    }
+    return result;
+  }
+
+  /// Builds initial live-form values for a schema-defined map field.
+  Map<String, dynamic> _initSchemaMap(
+      List<FieldDefinition> subFields, Map<String, dynamic> rawMap) {
+    final result = <String, dynamic>{};
+    for (final sf in subFields) {
+      final v = rawMap[sf.name];
+      result[sf.name] = switch (sf.type) {
+        FieldType.string    => v?.toString() ?? '',
+        FieldType.number    => v?.toString() ?? '0',
+        FieldType.boolean   => v is bool ? v : false,
+        FieldType.timestamp => v is Timestamp
+            ? v.toDate()
+            : (v is DateTime ? v : DateTime.now()),
+        FieldType.geopoint  => v is GeoPoint
+            ? _GeoPointDraft(v.latitude, v.longitude)
+            : _GeoPointDraft(0, 0),
+        FieldType.reference => v?.toString() ?? '',
+        FieldType.map       => v is Map<String, dynamic>
+            ? firestoreMapToFieldNodes(v)
+            : <FieldNode>[],
+        FieldType.array     => v is List
+            ? _rawListToArrayItems(v)
+            : <ArrayItem>[],
         FieldType.nullValue => null,
       };
     }
@@ -104,8 +136,11 @@ class _DynamicFormRendererState extends State<DynamicFormRenderer> {
         FieldType.boolean   => raw is bool ? raw : false,
         FieldType.timestamp =>
           raw is DateTime ? Timestamp.fromDate(raw) : Timestamp.now(),
-        FieldType.map => fieldNodesToFirestoreMap(
-            raw is List<FieldNode> ? raw : <FieldNode>[]),
+        FieldType.map => field.mapFields.isNotEmpty
+            ? _schemaMapToFirestore(field.mapFields,
+                raw is Map<String, dynamic> ? raw : {})
+            : fieldNodesToFirestoreMap(
+                raw is List<FieldNode> ? raw : <FieldNode>[]),
         FieldType.array => _arrayItemsToFirestore(
             raw is List<ArrayItem> ? raw : <ArrayItem>[]),
         FieldType.geopoint => raw is _GeoPointDraft
@@ -115,6 +150,36 @@ class _DynamicFormRendererState extends State<DynamicFormRenderer> {
           widget.firestore != null && raw is String && raw.isNotEmpty
               ? widget.firestore!.doc(raw)
               : raw,
+        FieldType.nullValue => null,
+      };
+    }
+    return result;
+  }
+
+  Map<String, dynamic> _schemaMapToFirestore(
+      List<FieldDefinition> subFields, Map<String, dynamic> liveValues) {
+    final result = <String, dynamic>{};
+    for (final sf in subFields) {
+      final v = liveValues[sf.name];
+      result[sf.name] = switch (sf.type) {
+        FieldType.string    => v?.toString() ?? '',
+        FieldType.number    => num.tryParse(v?.toString() ?? '0') ?? 0,
+        FieldType.boolean   => v is bool ? v : false,
+        FieldType.timestamp => v is DateTime
+            ? Timestamp.fromDate(v)
+            : Timestamp.now(),
+        FieldType.geopoint  => v is _GeoPointDraft
+            ? GeoPoint(v.lat, v.lng)
+            : const GeoPoint(0, 0),
+        FieldType.reference => widget.firestore != null &&
+                v is String &&
+                v.isNotEmpty
+            ? widget.firestore!.doc(v)
+            : v?.toString() ?? '',
+        FieldType.map       => fieldNodesToFirestoreMap(
+            v is List<FieldNode> ? v : []),
+        FieldType.array     => _arrayItemsToFirestore(
+            v is List<ArrayItem> ? v : []),
         FieldType.nullValue => null,
       };
     }
@@ -242,17 +307,26 @@ class _DynamicFormRendererState extends State<DynamicFormRenderer> {
                 : DateTime.now(),
             onChanged: (v) => setState(() => _values[field.name] = v),
           ),
-        FieldType.map => _MapValueField(
-            nodes: _values[field.name] is List<FieldNode>
-                ? _values[field.name] as List<FieldNode>
-                : <FieldNode>[],
-            onChanged: (nodes) =>
-                setState(() => _values[field.name] = nodes),
-          ),
+        FieldType.map => field.mapFields.isNotEmpty
+            ? _LockedSchemaMapField(
+                subFields: field.mapFields,
+                initialValues: _values[field.name] is Map<String, dynamic>
+                    ? _values[field.name] as Map<String, dynamic>
+                    : {},
+                onChanged: (m) => setState(() => _values[field.name] = m),
+              )
+            : _MapValueField(
+                nodes: _values[field.name] is List<FieldNode>
+                    ? _values[field.name] as List<FieldNode>
+                    : <FieldNode>[],
+                onChanged: (nodes) =>
+                    setState(() => _values[field.name] = nodes),
+              ),
         FieldType.array => _ArrayValueField(
             items: _values[field.name] is List<ArrayItem>
                 ? _values[field.name] as List<ArrayItem>
                 : <ArrayItem>[],
+            lockedItemType: field.arrayItemType,
             onChanged: (items) =>
                 setState(() => _values[field.name] = items),
           ),
@@ -412,15 +486,21 @@ class _MapValueField extends StatelessWidget {
 /// Array field — renders per-index item editors with type selector.
 class _ArrayValueField extends StatelessWidget {
   final List<ArrayItem> items;
+  final FieldType? lockedItemType;
   final ValueChanged<List<ArrayItem>> onChanged;
 
-  const _ArrayValueField({required this.items, required this.onChanged});
+  const _ArrayValueField({
+    required this.items,
+    required this.onChanged,
+    this.lockedItemType,
+  });
 
   @override
   Widget build(BuildContext context) {
     return ArrayEditorWidget(
       items: items,
       depth: 0,
+      lockedItemType: lockedItemType,
       onChanged: onChanged,
     );
   }
@@ -533,3 +613,257 @@ class _NullValueField extends StatelessWidget {
     );
   }
 }
+
+// ─── Locked schema map field ──────────────────────────────────────────────────
+
+/// Renders a map field whose sub-fields are predefined in the schema.
+/// Users can only edit values — the structure is locked.
+class _LockedSchemaMapField extends StatefulWidget {
+  final List<FieldDefinition> subFields;
+  final Map<String, dynamic> initialValues;
+  final ValueChanged<Map<String, dynamic>> onChanged;
+
+  const _LockedSchemaMapField({
+    required this.subFields,
+    required this.initialValues,
+    required this.onChanged,
+  });
+
+  @override
+  State<_LockedSchemaMapField> createState() => _LockedSchemaMapFieldState();
+}
+
+class _LockedSchemaMapFieldState extends State<_LockedSchemaMapField> {
+  late final Map<String, dynamic> _values;
+  final Map<String, TextEditingController> _textCtrls = {};
+  final Map<String, TextEditingController> _latCtrls = {};
+  final Map<String, TextEditingController> _lngCtrls = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _values = Map.from(widget.initialValues);
+    for (final sf in widget.subFields) {
+      final v = _values[sf.name];
+      if (sf.type == FieldType.string ||
+          sf.type == FieldType.number ||
+          sf.type == FieldType.reference) {
+        _textCtrls[sf.name] = TextEditingController(text: v?.toString() ?? '');
+      }
+      if (sf.type == FieldType.geopoint) {
+        final draft = v is _GeoPointDraft ? v : _GeoPointDraft(0, 0);
+        _values[sf.name] = draft;
+        _latCtrls[sf.name] =
+            TextEditingController(text: draft.lat.toString());
+        _lngCtrls[sf.name] =
+            TextEditingController(text: draft.lng.toString());
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final c in _textCtrls.values) c.dispose();
+    for (final c in _latCtrls.values) c.dispose();
+    for (final c in _lngCtrls.values) c.dispose();
+    super.dispose();
+  }
+
+  void _notify() => widget.onChanged(Map.from(_values));
+
+  @override
+  Widget build(BuildContext context) {
+    return NestedContainer(
+      depth: 0,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final sf in widget.subFields)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          sf.label.isNotEmpty ? sf.label : sf.name,
+                          style: Theme.of(context).textTheme.labelMedium,
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .secondaryContainer,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          sf.type.displayName,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSecondaryContainer,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  _buildEditor(sf),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEditor(FieldDefinition sf) {
+    final v = _values[sf.name];
+    switch (sf.type) {
+      case FieldType.string:
+        return TextField(
+          controller: _textCtrls[sf.name],
+          decoration: const InputDecoration(
+            hintText: 'value…',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          onChanged: (val) {
+            _values[sf.name] = val;
+            _notify();
+          },
+        );
+      case FieldType.number:
+        return TextField(
+          controller: _textCtrls[sf.name],
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            hintText: '0',
+            border: OutlineInputBorder(),
+            isDense: true,
+          ),
+          onChanged: (val) {
+            _values[sf.name] = val;
+            _notify();
+          },
+        );
+      case FieldType.boolean:
+        return DropdownButtonFormField<bool>(
+          initialValue: v is bool ? v : false,
+          isDense: true,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            isDense: true,
+            contentPadding:
+                EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          ),
+          items: const [
+            DropdownMenuItem(value: true, child: Text('true')),
+            DropdownMenuItem(value: false, child: Text('false')),
+          ],
+          onChanged: (val) {
+            setState(() => _values[sf.name] = val ?? false);
+            _notify();
+          },
+        );
+      case FieldType.timestamp:
+        return _TimestampValueField(
+          value: v is DateTime ? v : DateTime.now(),
+          onChanged: (dt) {
+            setState(() => _values[sf.name] = dt);
+            _notify();
+          },
+        );
+      case FieldType.geopoint:
+        final draft = v is _GeoPointDraft ? v : _GeoPointDraft(0, 0);
+        return Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _latCtrls[sf.name],
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Latitude',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (val) {
+                  draft.lat = double.tryParse(val) ?? 0;
+                  _notify();
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _lngCtrls[sf.name],
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Longitude',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (val) {
+                  draft.lng = double.tryParse(val) ?? 0;
+                  _notify();
+                },
+              ),
+            ),
+          ],
+        );
+      case FieldType.reference:
+        return TextField(
+          controller: _textCtrls[sf.name],
+          decoration: const InputDecoration(
+            hintText: 'collection/documentId',
+            border: OutlineInputBorder(),
+            isDense: true,
+            suffixIcon: Icon(Icons.link, size: 18),
+          ),
+          onChanged: (val) {
+            _values[sf.name] = val;
+            _notify();
+          },
+        );
+      case FieldType.map:
+        return _MapValueField(
+          nodes: v is List<FieldNode> ? v : [],
+          onChanged: (nodes) {
+            setState(() => _values[sf.name] = nodes);
+            _notify();
+          },
+        );
+      case FieldType.array:
+        return _ArrayValueField(
+          items: v is List<ArrayItem> ? v : [],
+          onChanged: (items) {
+            setState(() => _values[sf.name] = items);
+            _notify();
+          },
+        );
+      case FieldType.nullValue:
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: Chip(
+            label: const Text('null',
+                style: TextStyle(fontFamily: 'monospace', fontSize: 13)),
+            backgroundColor:
+                Theme.of(context).colorScheme.errorContainer,
+            labelStyle: TextStyle(
+                color: Theme.of(context).colorScheme.onErrorContainer),
+            side: BorderSide.none,
+          ),
+        );
+    }
+  }
+}
+

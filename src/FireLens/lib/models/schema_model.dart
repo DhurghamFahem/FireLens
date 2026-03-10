@@ -26,11 +26,15 @@ class FieldDefinition {
   final String name;
   final String label;
   final FieldType type;
+  final List<FieldDefinition> mapFields;
+  final FieldType? arrayItemType;
 
   const FieldDefinition({
     required this.name,
     required this.label,
     required this.type,
+    this.mapFields = const [],
+    this.arrayItemType,
   });
 
   factory FieldDefinition.fromJson(Map<String, dynamic> json) {
@@ -41,6 +45,16 @@ class FieldDefinition {
         (e) => e.name == json['type'],
         orElse: () => FieldType.string,
       ),
+      mapFields: (json['mapFields'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(FieldDefinition.fromJson)
+          .toList(),
+      arrayItemType: json['arrayItemType'] != null
+          ? FieldType.values.firstWhere(
+              (e) => e.name == json['arrayItemType'],
+              orElse: () => FieldType.string,
+            )
+          : null,
     );
   }
 
@@ -48,6 +62,9 @@ class FieldDefinition {
         'name': name,
         'label': label,
         'type': type.name,
+        if (mapFields.isNotEmpty)
+          'mapFields': mapFields.map((f) => f.toJson()).toList(),
+        if (arrayItemType != null) 'arrayItemType': arrayItemType!.name,
       };
 }
 

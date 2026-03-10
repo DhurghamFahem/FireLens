@@ -625,11 +625,13 @@ class ArrayEditorWidget extends StatefulWidget {
   final List<ArrayItem> items;
   final int depth;
   final ValueChanged<List<ArrayItem>> onChanged;
+  final FieldType? lockedItemType;
 
   const ArrayEditorWidget({
     required this.items,
     required this.depth,
     required this.onChanged,
+    this.lockedItemType,
   });
 
   @override
@@ -646,9 +648,10 @@ class ArrayEditorWidgetState extends State<ArrayEditorWidget> {
   }
 
   void _add() {
+    final type = widget.lockedItemType ?? FieldType.string;
     final updated = [
       ..._items,
-      ArrayItem(subtype: FieldType.string, value: ''),
+      ArrayItem(subtype: type, value: _defaultValue(type)),
     ];
     setState(() => _items = updated);
     widget.onChanged(updated);
@@ -681,6 +684,7 @@ class ArrayEditorWidgetState extends State<ArrayEditorWidget> {
                 index: i,
                 item: _items[i],
                 depth: widget.depth + 1,
+                lockedItemType: widget.lockedItemType,
                 onChanged: (updated) => _update(i, updated),
                 onDelete: () => _remove(i),
               ),
@@ -707,6 +711,7 @@ class _ArrayItemWidget extends StatefulWidget {
   final int index;
   final ArrayItem item;
   final int depth;
+  final FieldType? lockedItemType;
   final ValueChanged<ArrayItem> onChanged;
   final VoidCallback onDelete;
 
@@ -715,6 +720,7 @@ class _ArrayItemWidget extends StatefulWidget {
     required this.index,
     required this.item,
     required this.depth,
+    this.lockedItemType,
     required this.onChanged,
     required this.onDelete,
   });
@@ -806,26 +812,29 @@ class _ArrayItemWidgetState extends State<_ArrayItemWidget> {
                 ),
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: DropdownButtonFormField<FieldType>(
-                initialValue: _subtype,
-                isDense: true,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
+            if (widget.lockedItemType == null) ...[
+              const SizedBox(width: 8),
+              Expanded(
+                child: DropdownButtonFormField<FieldType>(
+                  initialValue: _subtype,
                   isDense: true,
-                  labelText: 'Type',
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    labelText: 'Type',
+                  ),
+                  items: FieldType.values
+                      .map((t) => DropdownMenuItem(
+                            value: t,
+                            child: Text(t.displayName,
+                                overflow: TextOverflow.ellipsis),
+                          ))
+                      .toList(),
+                  onChanged: _onSubtypeChanged,
                 ),
-                items: FieldType.values
-                    .map((t) => DropdownMenuItem(
-                          value: t,
-                          child: Text(t.displayName,
-                              overflow: TextOverflow.ellipsis),
-                        ))
-                    .toList(),
-                onChanged: _onSubtypeChanged,
               ),
-            ),
+            ] else
+              const Spacer(),
             const SizedBox(width: 4),
             IconButton(
               icon: const Icon(Icons.delete_outline, color: Colors.redAccent),

@@ -36,6 +36,13 @@ class _SchemaBuilderScreenState extends State<SchemaBuilderScreen> {
           nameCtrl: TextEditingController(text: f.name),
           labelCtrl: TextEditingController(text: f.label),
           type: f.type,
+          mapSubFields: f.mapFields
+              .map((sf) => _MapSubFieldEntry(
+                    nameCtrl: TextEditingController(text: sf.name),
+                    type: sf.type,
+                  ))
+              .toList(),
+          arrayItemType: f.arrayItemType ?? FieldType.string,
         ));
       }
     }
@@ -46,8 +53,7 @@ class _SchemaBuilderScreenState extends State<SchemaBuilderScreen> {
   void dispose() {
     _collectionNameCtrl.dispose();
     for (final f in _fields) {
-      f.nameCtrl.dispose();
-      f.labelCtrl.dispose();
+      f.dispose();
     }
     super.dispose();
   }
@@ -64,8 +70,7 @@ class _SchemaBuilderScreenState extends State<SchemaBuilderScreen> {
 
   void _removeField(int index) {
     setState(() {
-      _fields[index].nameCtrl.dispose();
-      _fields[index].labelCtrl.dispose();
+      _fields[index].dispose();
       _fields.removeAt(index);
     });
   }
@@ -78,6 +83,18 @@ class _SchemaBuilderScreenState extends State<SchemaBuilderScreen> {
               name: e.nameCtrl.text.trim(),
               label: e.labelCtrl.text.trim(),
               type: e.type,
+              mapFields: e.type == FieldType.map
+                  ? e.mapSubFields
+                      .where((sf) => sf.nameCtrl.text.trim().isNotEmpty)
+                      .map((sf) => FieldDefinition(
+                            name: sf.nameCtrl.text.trim(),
+                            label: sf.nameCtrl.text.trim(),
+                            type: sf.type,
+                          ))
+                      .toList()
+                  : const [],
+              arrayItemType:
+                  e.type == FieldType.array ? e.arrayItemType : null,
             ))
         .toList();
 
@@ -173,8 +190,6 @@ class _SchemaBuilderScreenState extends State<SchemaBuilderScreen> {
                   index: index,
                   canRemove: _fields.length > 1,
                   onRemove: () => _removeField(index),
-                  onTypeChanged: (t) =>
-                      setState(() => entry.type = t ?? FieldType.string),
                 );
               },
             ),
@@ -185,24 +200,51 @@ class _SchemaBuilderScreenState extends State<SchemaBuilderScreen> {
   }
 }
 
+// ─── Data classes ─────────────────────────────────────────────────────────────
+
+class _MapSubFieldEntry {
+  final TextEditingController nameCtrl;
+  FieldType type;
+
+  _MapSubFieldEntry({
+    required this.nameCtrl,
+    this.type = FieldType.string,
+  });
+
+  void dispose() => nameCtrl.dispose();
+}
+
 class _FieldEntry {
   final TextEditingController nameCtrl;
   final TextEditingController labelCtrl;
   FieldType type;
+  List<_MapSubFieldEntry> mapSubFields;
+  FieldType arrayItemType;
 
   _FieldEntry({
     required this.nameCtrl,
     required this.labelCtrl,
-    required this.type,
-  });
+    this.type = FieldType.string,
+    List<_MapSubFieldEntry>? mapSubFields,
+    this.arrayItemType = FieldType.string,
+  }) : mapSubFields = mapSubFields ?? [];
+
+  void dispose() {
+    nameCtrl.dispose();
+    labelCtrl.dispose();
+    for (final sf in mapSubFields) {
+      sf.dispose();
+    }
+  }
 }
 
-class _FieldRow extends StatelessWidget {
+// ─── Field Row (StatefulWidget) ───────────────────────────────────────────────
+
+class _FieldRow extends StatefulWidget {
   final _FieldEntry entry;
   final int index;
   final bool canRemove;
   final VoidCallback onRemove;
-  final ValueChanged<FieldType?> onTypeChanged;
 
   const _FieldRow({
     super.key,
@@ -210,43 +252,73 @@ class _FieldRow extends StatelessWidget {
     required this.index,
     required this.canRemove,
     required this.onRemove,
-    required this.onTypeChanged,
   });
 
   @override
+  State<_FieldRow> createState() => _FieldRowState();
+}
+
+class _FieldRowState extends State<_FieldRow> {
+  void _onTypeChanged(FieldType? t) {
+    if (t == null || t == widget.entry.type) return;
+    setState(() {
+      if (t != FieldType.map) {
+        for (final sf in widget.entry.mapSubFields) {
+          sf.dispose();
+        }
+        widget.entry.mapSubFields.clear();
+      }
+      if (t != FieldType.array) {
+        widget.entry.arrayItemType = FieldType.string;
+      }
+      widget.entry.type = t;
+    });
+  }
+
+  void _addSubField() {
+    setState(() {
+      widget.entry.mapSubFields.add(
+        _MapSubFieldEntry(nameCtrl: TextEditingController()),
+      );
+    });
+  }
+
+  void _removeSubField(int i) {
+    setState(() {
+      widget.entry.mapSubFields[i].dispose();
+      widget.entry.mapSubFields.removeAt(i);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final entry = widget.entry;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+        padding: const EdgeInsets.fromLTRB(8, 10, 4, 10),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Single row: index | name | label | type | delete | drag
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Field ${index + 1}',
-                    style: Theme.of(context).textTheme.labelLarge),
-                const Spacer(),
-                if (canRemove)
-                  IconButton(
-                    icon: const Icon(Icons.close, size: 18),
-                    tooltip: 'Remove field',
-                    onPressed: onRemove,
+                Padding(
+                  padding: const EdgeInsets.only(top: 14, right: 6),
+                  child: Text(
+                    '${widget.index + 1}',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
                   ),
-                ReorderableDragStartListener(
-                  index: index,
-                  child: const Icon(Icons.drag_handle),
                 ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            // Row 1: name + label
-            Row(
-              children: [
                 Expanded(
+                  flex: 3,
                   child: TextFormField(
                     controller: entry.nameCtrl,
                     decoration: const InputDecoration(
-                      labelText: 'Field name',
+                      labelText: 'Name',
                       hintText: 'e.g. title',
                       border: OutlineInputBorder(),
                       isDense: true,
@@ -255,8 +327,9 @@ class _FieldRow extends StatelessWidget {
                         (v == null || v.trim().isEmpty) ? 'Required' : null,
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 Expanded(
+                  flex: 3,
                   child: TextFormField(
                     controller: entry.labelCtrl,
                     decoration: const InputDecoration(
@@ -269,11 +342,157 @@ class _FieldRow extends StatelessWidget {
                         (v == null || v.trim().isEmpty) ? 'Required' : null,
                   ),
                 ),
+                const SizedBox(width: 6),
+                Expanded(
+                  flex: 2,
+                  child: DropdownButtonFormField<FieldType>(
+                    initialValue: entry.type,
+                    isDense: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Type',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                    ),
+                    items: FieldType.values
+                        .map((t) => DropdownMenuItem(
+                              value: t,
+                              child: Text(t.displayName,
+                                  overflow: TextOverflow.ellipsis),
+                            ))
+                        .toList(),
+                    onChanged: _onTypeChanged,
+                  ),
+                ),
+                if (widget.canRemove)
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 16),
+                    tooltip: 'Remove field',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: widget.onRemove,
+                  ),
+                ReorderableDragStartListener(
+                  index: widget.index,
+                  child: const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Icon(Icons.drag_handle, size: 20),
+                  ),
+                ),
               ],
             ),
-            const SizedBox(height: 8),
-            // Row 2: type dropdown — full width, no overflow risk
-            DropdownButtonFormField<FieldType>(
+
+            // Map sub-fields config
+            if (entry.type == FieldType.map) ...[
+              const SizedBox(height: 10),
+              _buildMapSubFields(context),
+            ],
+
+            // Array item type config
+            if (entry.type == FieldType.array) ...[
+              const SizedBox(height: 10),
+              _buildArrayConfig(context),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMapSubFields(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Map Sub-fields',
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                )),
+        const SizedBox(height: 6),
+        for (var i = 0; i < widget.entry.mapSubFields.length; i++)
+          _MapSubFieldRow(
+            key: ObjectKey(widget.entry.mapSubFields[i]),
+            entry: widget.entry.mapSubFields[i],
+            onTypeChanged: (t) => setState(
+                () => widget.entry.mapSubFields[i].type = t ?? FieldType.string),
+            onRemove: () => _removeSubField(i),
+          ),
+        TextButton.icon(
+          onPressed: _addSubField,
+          icon: const Icon(Icons.add, size: 14),
+          label: const Text('Add Sub-field'),
+          style: TextButton.styleFrom(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+            visualDensity: VisualDensity.compact,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildArrayConfig(BuildContext context) {
+    return Row(
+      children: [
+        Text('Item Type:',
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                )),
+        const SizedBox(width: 10),
+        Expanded(
+          child: DropdownButtonFormField<FieldType>(
+            initialValue: widget.entry.arrayItemType,
+            isDense: true,
+            decoration: const InputDecoration(
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            items: FieldType.values
+                .map((t) => DropdownMenuItem(
+                      value: t,
+                      child: Text(t.displayName),
+                    ))
+                .toList(),
+            onChanged: (t) =>
+                setState(() => widget.entry.arrayItemType = t ?? FieldType.string),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Map sub-field row ────────────────────────────────────────────────────────
+
+class _MapSubFieldRow extends StatelessWidget {
+  final _MapSubFieldEntry entry;
+  final ValueChanged<FieldType?> onTypeChanged;
+  final VoidCallback onRemove;
+
+  const _MapSubFieldRow({
+    super.key,
+    required this.entry,
+    required this.onTypeChanged,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6, left: 12),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 5,
+            child: TextField(
+              controller: entry.nameCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Sub-field name',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            flex: 3,
+            child: DropdownButtonFormField<FieldType>(
               initialValue: entry.type,
               isDense: true,
               decoration: const InputDecoration(
@@ -284,13 +503,19 @@ class _FieldRow extends StatelessWidget {
               items: FieldType.values
                   .map((t) => DropdownMenuItem(
                         value: t,
-                        child: Text(t.displayName),
+                        child:
+                            Text(t.displayName, overflow: TextOverflow.ellipsis),
                       ))
                   .toList(),
               onChanged: onTypeChanged,
             ),
-          ],
-        ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 16),
+            visualDensity: VisualDensity.compact,
+            onPressed: onRemove,
+          ),
+        ],
       ),
     );
   }
