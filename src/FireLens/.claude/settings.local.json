@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter pub get)",
+      "Bash(flutter analyze lib)",
+      "Bash(flutter analyze lib test)",
+      "Bash(flutter analyze lib/widgets/document_editor.dart)",
+      "Bash(flutter analyze:*)"
+    ]
+  }
+}
